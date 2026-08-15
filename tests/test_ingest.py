@@ -1,5 +1,4 @@
 import tempfile
-from pathlib import Path
 
 from reportlab.pdfgen import canvas
 

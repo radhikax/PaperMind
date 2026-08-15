@@ -63,7 +63,12 @@ class SummarizerAgent:
         # If OpenAI is available, call it for a concise summary.
         if openai is not None:
             # Request structured JSON output containing `summary` and `citations`.
-            system = "You are a helpful assistant that summarizes scientific paper snippets. Return a JSON object with keys: summary (string), citations (list of {page:int, chunk_id:int, excerpt:string}). If no exact page is available, omit the citation."
+            system = (
+                "You are a helpful assistant that summarizes scientific paper snippets."
+                " Return a JSON object with keys: summary (string), citations (list of "
+                "{page:int, chunk_id:int, excerpt:string})."
+                " If no exact page is available, omit the citation."
+            )
             user = (
                 f"Summarize the following passages from a paper, preserving factual statements. "
                 f"Each passage is prefixed with metadata in square brackets like [chunk_id:X page:Y]. "
@@ -72,11 +77,17 @@ class SummarizerAgent:
 
             import json
 
-            from src.schemas import Citation, SummaryResponse
-
+            from src.schemas import SummaryResponse
             for attempt in range(self.max_attempts):
                 try:
-                    resp = openai.ChatCompletion.create(model=self.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], temperature=0.0)
+                    resp = openai.ChatCompletion.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        temperature=0.0,
+                    )
                     text = resp.choices[0].message.content.strip()
                     try:
                         data = json.loads(text)
@@ -90,13 +101,22 @@ class SummarizerAgent:
                                     citation_strs.append(f"[p.{c.page}#id:{c.chunk_id}]")
                             summary_text = parsed.summary
                             if citation_strs:
-                                summary_text = summary_text + "\n\nCitations: " + ", ".join(citation_strs)
-                            return {"summary": summary_text, "citations": [c.dict() for c in parsed.citations], "valid": True}
+                                summary_text = (
+                                    summary_text + "\n\nCitations: " + ", ".join(citation_strs)
+                                )
+                            return {
+                                "summary": summary_text,
+                                "citations": [c.dict() for c in parsed.citations],
+                                "valid": True,
+                            }
                         except Exception:
                             # validation failed
                             if attempt < (self.max_attempts - 1):
                                 user = (
-                                    "The previous response did not match the required JSON schema. Please RETURN EXACT JSON matching {summary: str, citations: [{page:int, chunk_id:int, excerpt:str}]}. Reply ONLY with JSON."
+                                    "The previous response did not match the required JSON schema. "
+                                    "Please RETURN EXACT JSON matching {summary: str, citations: [{page:int, "
+                                    "chunk_id:int, excerpt:str}]}."
+                                    " Reply ONLY with JSON."
                                 )
                                 continue
                             else:
@@ -105,7 +125,8 @@ class SummarizerAgent:
                     except json.JSONDecodeError:
                         if attempt < (self.max_attempts - 1):
                             user = (
-                                "Your response must be JSON with keys 'summary' and 'citations'. Reply ONLY with the JSON."
+                                "Your response must be JSON with keys 'summary' and 'citations'. "
+                                "Reply ONLY with the JSON."
                             )
                             continue
                         else:
@@ -125,8 +146,19 @@ class CriticAgent:
         # If OpenAI available, ask it to rate confidence and hallucination
         if openai is not None:
             prompt = [
-                {"role": "system", "content": "You are an expert reviewer who detects hallucinations in summaries of scientific text. Reply JSON with keys: confidence (0-1), hallucination_rate (0-1), notes."},
-                {"role": "user", "content": f"Assess the following summary for hallucinations and assign a confidence score:\n\n{summary}"},
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert reviewer who detects hallucinations in summaries of scientific text. "
+                        "Reply JSON with keys: confidence (0-1), hallucination_rate (0-1), notes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Assess the following summary for hallucinations and assign a confidence score:\n\n{summary}"
+                    ),
+                },
             ]
             try:
                 resp = openai.ChatCompletion.create(model=self.model, messages=prompt, temperature=0.0)
@@ -145,5 +177,7 @@ class CriticAgent:
         # Fallback heuristic based on length
         length = len(summary)
         confidence = min(0.95, max(0.1, length / 2000.0))
-        return {"confidence": round(confidence, 2), "notes": "Heuristic fallback: confidence based on summary length."}
-
+        return {
+            "confidence": round(confidence, 2),
+            "notes": "Heuristic fallback: confidence based on summary length.",
+        }

@@ -42,7 +42,6 @@ def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: in
             continue
         sentences = split_sentences(text)
         cur = ""
-        cur_start = 0
         for sent in sentences:
             if cur:
                 next_text = cur + " " + sent
@@ -53,10 +52,16 @@ def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: in
                 # finalize current chunk
                 start_idx = text.find(cur) if cur else text.find(sent)
                 end_idx = start_idx + len(cur)
-                chunks.append({
-                    "text": cur.strip(),
-                    "source": {"page": page_num, "start_char": start_idx, "end_char": end_idx},
-                })
+                chunks.append(
+                    {
+                        "text": cur.strip(),
+                        "source": {
+                            "page": page_num,
+                            "start_char": start_idx,
+                            "end_char": end_idx,
+                        },
+                    }
+                )
                 # prepare next chunk with overlap
                 overlap_text = next_text[-overlap:]
                 cur = overlap_text
@@ -66,7 +71,16 @@ def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: in
         if cur:
             start_idx = text.find(cur)
             end_idx = start_idx + len(cur)
-            chunks.append({"text": cur.strip(), "source": {"page": page_num, "start_char": start_idx, "end_char": end_idx}})
+            chunks.append(
+                {
+                    "text": cur.strip(),
+                    "source": {
+                        "page": page_num,
+                        "start_char": start_idx,
+                        "end_char": end_idx,
+                    },
+                }
+            )
 
     return chunks
 
@@ -74,4 +88,3 @@ def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: in
 def load_and_chunk(path: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
     pages = load_pdf_pages(path)
     return chunk_pages_to_chunks(pages, chunk_size=chunk_size, overlap=overlap)
-

@@ -9,7 +9,7 @@ from `src.agents`.
 Replace the LangGraph wiring below with your project's orchestration
 when ready.
 """
-from typing import Tuple
+# typing imports not needed
 
 from src.agents import CriticAgent, RetrieverAgent, SummarizerAgent
 
@@ -61,7 +61,8 @@ def make_orchestrator(store, embedder, llm=None):
             try:
                 from langgraph import build_graph
 
-                graph = build_graph(
+                # build_graph returns a graph object for some langgraph versions; we don't need to keep it
+                build_graph(
                     {
                         "retriever": lambda q, top_k=5: retriever.retrieve(q, top_k=top_k),
                         "summarizer": lambda chunks: summarizer.summarize(chunks),
