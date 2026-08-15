@@ -25,4 +25,5 @@ jobs:
           isort --check-only src tests app.py
           flake8 --max-line-length=120 src tests app.py
       - name: Run tests
-        run: pytest -q
+        run: |
+          PYTHONPATH=. pytest -q
