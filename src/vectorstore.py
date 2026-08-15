@@ -1,6 +1,7 @@
-from typing import List, Tuple
-import numpy as np
 import pickle
+from typing import List, Tuple
+
+import numpy as np
 
 try:
     import faiss

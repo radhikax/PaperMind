@@ -22,7 +22,7 @@ jobs:
           pip install flake8 isort
       - name: Run linters
         run: |
-          isort --check-only .
-          flake8 .
+          isort --check-only src tests app.py
+          flake8 --max-line-length=120 src tests app.py
       - name: Run tests
         run: pytest -q

@@ -1,6 +1,7 @@
 import tempfile
-from reportlab.pdfgen import canvas
 from pathlib import Path
+
+from reportlab.pdfgen import canvas
 
 from src.ingest import load_and_chunk
 

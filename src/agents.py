@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import Dict, List
 
 try:
     import openai
@@ -41,24 +41,40 @@ class VerifierAgent:
 
 
 class SummarizerAgent:
-    def __init__(self, llm_model: str = "gpt-3.5-turbo"):
+    def __init__(self, llm_model: str = "gpt-3.5-turbo", max_attempts: int = 3):
         self.model = llm_model
+        self.max_attempts = max_attempts
 
-    def summarize(self, chunks: List[str]) -> str:
-        joined = "\n\n".join(chunks)
+    def summarize(self, chunks: List[dict]) -> str:
+        # chunks may be a list of strings (legacy) or list of dicts with metadata
+        passages = []
+        for i, c in enumerate(chunks):
+            if isinstance(c, dict):
+                text = c.get('text', '')
+                src = c.get('source', {}) or {}
+                page = src.get('page') or c.get('page') or None
+                chunk_id = c.get('id') if c.get('id') is not None else i
+                header = f"[chunk_id:{chunk_id} page:{page}]" if page is not None else f"[chunk_id:{chunk_id}]"
+                passages.append(f"{header}\n{text}")
+            else:
+                passages.append(str(c))
+
+        joined = "\n\n".join(passages)
         # If OpenAI is available, call it for a concise summary.
         if openai is not None:
             # Request structured JSON output containing `summary` and `citations`.
             system = "You are a helpful assistant that summarizes scientific paper snippets. Return a JSON object with keys: summary (string), citations (list of {page:int, chunk_id:int, excerpt:string}). If no exact page is available, omit the citation."
             user = (
                 f"Summarize the following passages from a paper, preserving factual statements. "
+                f"Each passage is prefixed with metadata in square brackets like [chunk_id:X page:Y]. "
                 f"Return EXACTLY a JSON object. Passages:\n\n{joined}"
             )
 
-            from src.schemas import SummaryResponse, Citation
             import json
 
-            for attempt in range(2):
+            from src.schemas import Citation, SummaryResponse
+
+            for attempt in range(self.max_attempts):
                 try:
                     resp = openai.ChatCompletion.create(model=self.model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], temperature=0.0)
                     text = resp.choices[0].message.content.strip()
@@ -78,7 +94,7 @@ class SummarizerAgent:
                             return {"summary": summary_text, "citations": [c.dict() for c in parsed.citations], "valid": True}
                         except Exception:
                             # validation failed
-                            if attempt == 0:
+                            if attempt < (self.max_attempts - 1):
                                 user = (
                                     "The previous response did not match the required JSON schema. Please RETURN EXACT JSON matching {summary: str, citations: [{page:int, chunk_id:int, excerpt:str}]}. Reply ONLY with JSON."
                                 )
@@ -87,7 +103,7 @@ class SummarizerAgent:
                                 # give up: return invalid flag with raw text
                                 return {"summary": text, "citations": [], "valid": False}
                     except json.JSONDecodeError:
-                        if attempt == 0:
+                        if attempt < (self.max_attempts - 1):
                             user = (
                                 "Your response must be JSON with keys 'summary' and 'citations'. Reply ONLY with the JSON."
                             )

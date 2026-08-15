@@ -1,5 +1,5 @@
-from typing import List, Tuple
 import re
+from typing import List, Tuple
 
 
 def semantic_similarity_score(summary: str, store, embedder, top_k: int = 10) -> float:

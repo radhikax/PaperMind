@@ -11,7 +11,7 @@ when ready.
 """
 from typing import Tuple
 
-from src.agents import RetrieverAgent, SummarizerAgent, CriticAgent
+from src.agents import CriticAgent, RetrieverAgent, SummarizerAgent
 
 
 def make_orchestrator(store, embedder, llm=None):
@@ -24,7 +24,7 @@ def make_orchestrator(store, embedder, llm=None):
     wrappers around the local agents.
     """
     retriever = RetrieverAgent(store, embedder)
-    summarizer = SummarizerAgent(llm_model=(llm or "gpt-3.5-turbo"))
+    summarizer = SummarizerAgent(llm_model=(llm or "gpt-3.5-turbo"), max_attempts=3)
     critic = CriticAgent(llm_model=(llm or "gpt-3.5-turbo"))
 
     # Try to build a LangGraph graph if the package is present.
