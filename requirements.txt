@@ -1,0 +1,15 @@
+streamlit
+faiss-cpu
+sentence-transformers
+pdfplumber
+numpy
+PyPDF2
+langgraph
+openai
+python-dotenv
+reportlab
+pytest
+pydantic
+flake8
+isort
+pandas
