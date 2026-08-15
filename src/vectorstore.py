@@ -37,9 +37,9 @@ class FaissStore:
         q = query_emb.astype('float32')
         if q.ndim == 1:
             q = q.reshape(1, -1)
-        D, I = self.index.search(q, top_k)
+        D, idxs = self.index.search(q, top_k)
         results: List[Tuple[float, dict]] = []
-        for score_row, idx_row in zip(D, I):
+        for score_row, idx_row in zip(D, idxs):
             for score, idx in zip(score_row, idx_row):
                 if idx < len(self.metadatas) and idx != -1:
                     results.append((float(score), self.metadatas[idx]))
@@ -60,5 +60,5 @@ class FaissStore:
         inst = cls(index.d)
         inst.index = index
         inst.metadatas = metadatas
-        return inst
 
+        return inst

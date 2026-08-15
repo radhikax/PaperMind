@@ -7,8 +7,6 @@ def semantic_similarity_score(summary: str, store, embedder, top_k: int = 10) ->
 
     Returns a float in [0,1] (higher is more similar).
     """
-    import numpy as np
-
     q_emb = embedder.embed_texts([summary])
     results = store.search(q_emb, top_k=top_k)
     if not results:
@@ -56,7 +54,13 @@ def verifier_overlap_ratio(summary: str, store, embedder, original_ids: List[int
     return len(common) / len(set(original_ids))
 
 
-def compute_numeric_confidence(summary: str, retrieved_results: List[Tuple[float, dict]], store, embedder, critic_assessment: dict = None) -> int:
+def compute_numeric_confidence(
+    summary: str,
+    retrieved_results: List[Tuple[float, dict]],
+    store,
+    embedder,
+    critic_assessment: dict = None,
+) -> int:
     """Combine semantic similarity, verifier overlap, citation presence, and critic to produce 0-100 score."""
     # prepare metadata
     retrieved_meta = [m for _, m in retrieved_results]

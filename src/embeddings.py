@@ -24,7 +24,7 @@ class EmbeddingModel:
 
         embs_list = []
         for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
+            batch = texts[i:i + batch_size]
             batch_embs = self.model.encode(batch, convert_to_numpy=True, show_progress_bar=False)
             embs_list.append(batch_embs)
 
