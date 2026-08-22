@@ -1,5 +1,4 @@
-import re
-from typing import List, Tuple
+from typing import List, Optional
 
 
 def semantic_similarity_score(summary: str, store, embedder, top_k: int = 10) -> float:
@@ -11,33 +10,9 @@ def semantic_similarity_score(summary: str, store, embedder, top_k: int = 10) ->
     results = store.search(q_emb, top_k=top_k)
     if not results:
         return 0.0
-    # results is list of (score, metadata) pairs; scores are inner-product (~cosine)
     scores = [s for s, _ in results]
-    # normalize from [-1,1] to [0,1]
     norm_scores = [max(0.0, min(1.0, float(sc))) for sc in scores]
-    # use max score as representative
     return float(max(norm_scores))
-
-
-def citation_present(summary, retrieved_meta: List[dict]) -> bool:
-    """Check whether summary contains citations (page numbers or chunk ids).
-
-    Heuristic: look for 'page' or 'p.' followed by digits, or presence of any page number.
-    """
-    # summary may be a dict returned from summarizer
-    if isinstance(summary, dict):
-        text = summary.get("summary", "").lower()
-    else:
-        text = str(summary).lower()
-    if re.search(r'page\s*\d+|p\.\s*\d+', text):
-        return True
-    # check numeric tokens against retrieved pages
-    pages = {str(m.get('source', {}).get('page')) for m in retrieved_meta if m.get('source', {}).get('page')}
-    tokens = re.findall(r'\d+', summary)
-    for t in tokens:
-        if t in pages:
-            return True
-    return False
 
 
 def verifier_overlap_ratio(summary: str, store, embedder, original_ids: List[int], top_k: int = 10) -> float:
@@ -54,31 +29,75 @@ def verifier_overlap_ratio(summary: str, store, embedder, original_ids: List[int
     return len(common) / len(set(original_ids))
 
 
-def compute_numeric_confidence(
-    summary: str,
-    retrieved_results: List[Tuple[float, dict]],
-    store,
-    embedder,
-    critic_assessment: dict = None,
-) -> int:
-    """Combine semantic similarity, verifier overlap, citation presence, and critic to produce 0-100 score."""
-    # prepare metadata
-    retrieved_meta = [m for _, m in retrieved_results]
-    original_ids = [m.get('id') for m in retrieved_meta if m.get('id') is not None]
+class ReliabilityEvaluator:
+    """Aggregates multiple signals into a 0-100 reliability score and a routing decision."""
 
-    semantic = semantic_similarity_score(summary, store, embedder, top_k=10)
-    verifier = verifier_overlap_ratio(summary, store, embedder, original_ids, top_k=10)
-    citation = 1.0 if citation_present(summary, retrieved_meta) else 0.0
+    SEMANTIC_WEIGHT = 0.40
+    VERIFIER_WEIGHT = 0.25
+    CRITIC_WEIGHT = 0.20
+    CITATION_WEIGHT = 0.15
 
-    critic_conf = 0.5
-    if critic_assessment and isinstance(critic_assessment.get('confidence'), (int, float)):
-        critic_conf = float(critic_assessment.get('confidence'))
+    def __init__(self, accept_threshold: int = 70):
+        self.accept_threshold = accept_threshold
 
-    # Weights (tunable): semantic 45%, verifier 30%, critic 20%, citation bonus 5%
-    base = 0.45 * semantic + 0.30 * verifier + 0.20 * critic_conf
-    if citation:
-        base = base + 0.05 * 1.0
+    def evaluate(
+        self,
+        summary_text: str,
+        retrieved_chunks: List[dict],
+        store,
+        embedder,
+        critic_assessment: Optional[dict],
+        citation_verified_ratio: float,
+        attempt: int,
+        max_attempts: int,
+    ) -> dict:
+        original_ids = [c.get('id') for c in retrieved_chunks if c.get('id') is not None]
+        semantic = semantic_similarity_score(summary_text, store, embedder, top_k=10)
+        verifier = verifier_overlap_ratio(summary_text, store, embedder, original_ids, top_k=10)
 
-    # Clip and scale to 0-100
-    score = max(0.0, min(1.0, base))
-    return int(round(score * 100))
+        critic_conf = 0.5
+        if critic_assessment and isinstance(critic_assessment.get('confidence'), (int, float)):
+            critic_conf = float(critic_assessment['confidence'])
+
+        base = (
+            self.SEMANTIC_WEIGHT * semantic
+            + self.VERIFIER_WEIGHT * verifier
+            + self.CRITIC_WEIGHT * critic_conf
+            + self.CITATION_WEIGHT * citation_verified_ratio
+        )
+        score = int(round(max(0.0, min(1.0, base)) * 100))
+
+        if score >= self.accept_threshold:
+            return {"score": score, "decision": "accept", "critique_feedback": None}
+
+        if attempt >= max_attempts:
+            return {"score": score, "decision": "exhausted", "critique_feedback": None}
+
+        critique_feedback = self._build_critique(semantic, verifier, critic_assessment, citation_verified_ratio)
+        return {"score": score, "decision": "revise", "critique_feedback": critique_feedback}
+
+    def _build_critique(
+        self,
+        semantic: float,
+        verifier: float,
+        critic_assessment: Optional[dict],
+        citation_verified_ratio: float,
+    ) -> str:
+        issues = []
+        if citation_verified_ratio < 0.5:
+            issues.append(
+                "citations could not be verified against the source text — cite exact "
+                "page/chunk ids that appear in the retrieved passages, with excerpts copied verbatim"
+            )
+        hallucination_rate = (critic_assessment or {}).get('hallucination_rate')
+        if isinstance(hallucination_rate, (int, float)) and hallucination_rate > 0.3:
+            issues.append(f"hallucination_rate {hallucination_rate:.2f} exceeds 0.3 — remove unsupported claims")
+        if verifier < 0.3:
+            issues.append("the summary drifts from the retrieved passages — stay closer to the source wording")
+        if semantic < 0.3:
+            issues.append(
+                "the summary is not semantically close to the retrieved passages — reground it in the provided text"
+            )
+        if not issues:
+            issues.append("overall reliability score is below threshold — tighten factual grounding and citations")
+        return "; ".join(issues)
