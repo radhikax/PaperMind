@@ -1,17 +1,10 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-try:
-    import openai
-except Exception:
-    openai = None
+from src.llm_client import get_openai_client
+from src.retry import call_with_retries_validate
+from src.schemas import CriticAssessment, SummaryResponse
 
-# Load .env automatically if python-dotenv is available so OPENAI_API_KEY
-# can be provided via a .env file in the project root.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
+_UNSET = object()
 
 
 class RetrieverAgent:
@@ -25,159 +18,185 @@ class RetrieverAgent:
         return results
 
 
-class VerifierAgent:
-    def __init__(self, store, embedder):
-        self.store = store
-        self.embedder = embedder
-
-    def verify(self, summary: str, original_ids: list, top_k: int = 10) -> dict:
-        """Re-query the store with the summary and return overlap metrics."""
-        q_emb = self.embedder.embed_texts([summary])
-        results = self.store.search(q_emb, top_k=top_k)
-        retrieved_ids = [m.get('id') for _, m in results if m.get('id') is not None]
-        common = set(original_ids) & set(retrieved_ids)
-        overlap = len(common) / max(1, len(set(original_ids))) if original_ids else 0.0
-        return {"overlap": round(float(overlap), 3), "retrieved_ids": retrieved_ids}
+def _format_passages(chunks: List[dict]) -> str:
+    passages = []
+    for i, c in enumerate(chunks):
+        if isinstance(c, dict):
+            text = c.get('text', '')
+            src = c.get('source', {}) or {}
+            page = src.get('page') or c.get('page')
+            chunk_id = c.get('id') if c.get('id') is not None else i
+            header = f"[chunk_id:{chunk_id} page:{page}]" if page is not None else f"[chunk_id:{chunk_id}]"
+            passages.append(f"{header}\n{text}")
+        else:
+            passages.append(str(c))
+    return "\n\n".join(passages)
 
 
 class SummarizerAgent:
-    def __init__(self, llm_model: str = "gpt-3.5-turbo", max_attempts: int = 3):
+    def __init__(self, llm_model: str = "gpt-4o-mini", max_attempts: int = 3, client=_UNSET):
         self.model = llm_model
         self.max_attempts = max_attempts
+        self.client = get_openai_client() if client is _UNSET else client
 
-    def summarize(self, chunks: List[dict]) -> str:
-        # chunks may be a list of strings (legacy) or list of dicts with metadata
-        passages = []
-        for i, c in enumerate(chunks):
-            if isinstance(c, dict):
-                text = c.get('text', '')
-                src = c.get('source', {}) or {}
-                page = src.get('page') or c.get('page') or None
-                chunk_id = c.get('id') if c.get('id') is not None else i
-                header = f"[chunk_id:{chunk_id} page:{page}]" if page is not None else f"[chunk_id:{chunk_id}]"
-                passages.append(f"{header}\n{text}")
-            else:
-                passages.append(str(c))
+    @property
+    def llm_available(self) -> bool:
+        return self.client is not None
 
-        joined = "\n\n".join(passages)
-        # If OpenAI is available, call it for a concise summary.
-        if openai is not None:
-            # Request structured JSON output containing `summary` and `citations`.
-            system = (
-                "You are a helpful assistant that summarizes scientific paper snippets."
-                " Return a JSON object with keys: summary (string), citations (list of "
-                "{page:int, chunk_id:int, excerpt:string})."
-                " If no exact page is available, omit the citation."
+    def _heuristic_summary(self, joined: str) -> dict:
+        text = joined[:1500].strip() + ("..." if len(joined) > 1500 else "")
+        return {"summary": text, "citations": [], "valid": False}
+
+    def summarize(
+        self,
+        chunks: List[dict],
+        critique_feedback: Optional[str] = None,
+        previous_summary: Optional[str] = None,
+    ) -> dict:
+        joined = _format_passages(chunks)
+        if not self.llm_available:
+            return self._heuristic_summary(joined)
+
+        system = (
+            "You are a helpful assistant that summarizes scientific paper snippets. "
+            "Each passage is prefixed with metadata like [chunk_id:X page:Y]. "
+            "Every citation you return must reference a chunk_id that actually appears "
+            "in the passages, and its excerpt must be copied verbatim from that chunk's text."
+        )
+        user = f"Summarize the following passages, preserving factual statements:\n\n{joined}"
+        if critique_feedback and previous_summary:
+            user += (
+                f"\n\nYour previous summary was:\n{previous_summary}\n\n"
+                f"A reviewer found these problems: {critique_feedback}\n"
+                "Revise the summary to fix these specific issues while staying grounded "
+                "in the passages above."
             )
-            user = (
-                f"Summarize the following passages from a paper, preserving factual statements. "
-                f"Each passage is prefixed with metadata in square brackets like [chunk_id:X page:Y]. "
-                f"Return EXACTLY a JSON object. Passages:\n\n{joined}"
+
+        def call():
+            resp = self.client.chat.completions.parse(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format=SummaryResponse,
+                temperature=0.0,
             )
+            return resp.choices[0].message
 
-            import json
+        def is_valid(message) -> bool:
+            return message is not None and getattr(message, "parsed", None) is not None
 
-            from src.schemas import SummaryResponse
-            for attempt in range(self.max_attempts):
-                try:
-                    resp = openai.ChatCompletion.create(
-                        model=self.model,
-                        messages=[
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                        temperature=0.0,
-                    )
-                    text = resp.choices[0].message.content.strip()
-                    try:
-                        data = json.loads(text)
-                        # Validate against pydantic model
-                        try:
-                            parsed = SummaryResponse(**data)
-                            # build inline citation markers for display
-                            citation_strs = []
-                            for c in parsed.citations:
-                                if c.page and c.chunk_id is not None:
-                                    citation_strs.append(f"[p.{c.page}#id:{c.chunk_id}]")
-                            summary_text = parsed.summary
-                            if citation_strs:
-                                summary_text = (
-                                    summary_text + "\n\nCitations: " + ", ".join(citation_strs)
-                                )
-                            return {
-                                "summary": summary_text,
-                                "citations": [c.dict() for c in parsed.citations],
-                                "valid": True,
-                            }
-                        except Exception:
-                            # validation failed
-                            if attempt < (self.max_attempts - 1):
-                                user = (
-                                    "The previous response did not match the required JSON schema. "
-                                    "Please RETURN EXACT JSON matching {summary: str, citations: [{page:int, "
-                                    "chunk_id:int, excerpt:str}]}."
-                                    " Reply ONLY with JSON."
-                                )
-                                continue
-                            else:
-                                # give up: return invalid flag with raw text
-                                return {"summary": text, "citations": [], "valid": False}
-                    except json.JSONDecodeError:
-                        if attempt < (self.max_attempts - 1):
-                            user = (
-                                "Your response must be JSON with keys 'summary' and 'citations'. "
-                                "Reply ONLY with the JSON."
-                            )
-                            continue
-                        else:
-                            return {"summary": text, "citations": [], "valid": False}
-                except Exception:
-                    break
+        try:
+            message = call_with_retries_validate(
+                call, validator=is_valid, max_attempts=self.max_attempts, initial_delay=0.5,
+            )
+        except Exception:
+            message = None
 
-        # Fallback: simple join+truncate
-        return (joined[:1500].strip() + ("..." if len(joined) > 1500 else ""))
+        if message is None or message.parsed is None:
+            return self._heuristic_summary(joined)
+
+        parsed: SummaryResponse = message.parsed
+        citation_strs = [
+            f"[p.{c.page}#id:{c.chunk_id}]" for c in parsed.citations if c.page and c.chunk_id is not None
+        ]
+        summary_text = parsed.summary
+        if citation_strs:
+            summary_text = summary_text + "\n\nCitations: " + ", ".join(citation_strs)
+
+        return {
+            "summary": summary_text,
+            "citations": [c.model_dump() for c in parsed.citations],
+            "valid": True,
+        }
 
 
 class CriticAgent:
-    def __init__(self, llm_model: str = "gpt-3.5-turbo"):
+    def __init__(self, llm_model: str = "gpt-4o-mini", max_attempts: int = 2, client=_UNSET):
         self.model = llm_model
+        self.max_attempts = max_attempts
+        self.client = get_openai_client() if client is _UNSET else client
 
-    def assess(self, summary: str) -> Dict:
-        # If OpenAI available, ask it to rate confidence and hallucination
-        if openai is not None:
-            prompt = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert reviewer who detects hallucinations in summaries of scientific text. "
-                        "Reply JSON with keys: confidence (0-1), hallucination_rate (0-1), notes."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Assess the following summary for hallucinations and assign a confidence score:\n\n{summary}"
-                    ),
-                },
-            ]
-            try:
-                resp = openai.ChatCompletion.create(model=self.model, messages=prompt, temperature=0.0)
-                text = resp.choices[0].message.content.strip()
-                # Try to parse a simple JSON blob from the model; if parsing fails, fall back.
-                import json
+    @property
+    def llm_available(self) -> bool:
+        return self.client is not None
 
-                try:
-                    data = json.loads(text)
-                    return data
-                except Exception:
-                    return {"confidence": 0.5, "notes": text}
-            except Exception:
-                pass
-
-        # Fallback heuristic based on length
+    def _heuristic_assessment(self, summary: str) -> dict:
         length = len(summary)
         confidence = min(0.95, max(0.1, length / 2000.0))
         return {
             "confidence": round(confidence, 2),
+            "hallucination_rate": round(1 - confidence, 2),
             "notes": "Heuristic fallback: confidence based on summary length.",
         }
+
+    def assess(self, summary: str) -> Dict:
+        if not self.llm_available:
+            return self._heuristic_assessment(summary)
+
+        system = (
+            "You are an expert reviewer who detects hallucinations in summaries of "
+            "scientific text. Assign a confidence (0-1) that the summary is fully "
+            "supported by its source, a hallucination_rate (0-1), and short notes."
+        )
+        user = f"Assess the following summary for hallucinations:\n\n{summary}"
+
+        def call():
+            resp = self.client.chat.completions.parse(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format=CriticAssessment,
+                temperature=0.0,
+            )
+            return resp.choices[0].message
+
+        def is_valid(message) -> bool:
+            return message is not None and getattr(message, "parsed", None) is not None
+
+        try:
+            message = call_with_retries_validate(
+                call, validator=is_valid, max_attempts=self.max_attempts, initial_delay=0.5,
+            )
+        except Exception:
+            message = None
+
+        if message is None or message.parsed is None:
+            return self._heuristic_assessment(summary)
+
+        return message.parsed.model_dump()
+
+
+class CitationVerifierAgent:
+    """Checks summarizer citations against the retrieved chunks; no LLM call required."""
+
+    def verify(self, citations: List[dict], retrieved_chunks: List[dict]) -> dict:
+        chunk_by_id = {c.get('id'): c for c in retrieved_chunks if c.get('id') is not None}
+        checks = []
+        for cit in citations:
+            chunk_id = cit.get('chunk_id')
+            page = cit.get('page')
+            excerpt = (cit.get('excerpt') or '').strip().lower()
+            chunk = chunk_by_id.get(chunk_id)
+            found = chunk is not None
+            if found and excerpt:
+                text_match = excerpt in (chunk.get('text', '') or '').lower()
+            else:
+                text_match = found
+            checks.append(
+                {
+                    "chunk_id": chunk_id,
+                    "page": page,
+                    "found_in_chunks": found,
+                    "text_match": text_match,
+                }
+            )
+
+        if not checks:
+            return {"checks": [], "verified_ratio": 0.0}
+
+        verified = sum(1 for c in checks if c["found_in_chunks"] and c["text_match"])
+        return {"checks": checks, "verified_ratio": verified / len(checks)}
