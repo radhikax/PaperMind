@@ -46,6 +46,8 @@ Files
 - `src/ingest.py`: PDF loading + chunking
 - `src/embeddings.py`: embedding wrapper (sentence-transformers)
 - `src/vectorstore.py`: FAISS index helper
-- `src/agents.py`: simple Retriever / Summarizer / Critic placeholders
+- `src/agents.py`: Retriever, Summarizer, Critic, and CitationVerifier agents
+- `src/evaluator.py`: ReliabilityEvaluator — aggregates agent signals into a score and a revise/accept/exhausted decision
+- `src/langgraph_agents.py`: the LangGraph StateGraph wiring the agents into a reliability-gated revision loop
 
-This repo is a crash-course scaffold. Replace the placeholder agents with LangGraph orchestrations and LLM calls as needed.
+The retriever, summarizer, critic, citation-verifier, and reliability-evaluator agents run as a real LangGraph `StateGraph` (see `src/langgraph_agents.py`). If the reliability evaluator scores a summary below its threshold, it sends the summary back to the summarizer with specific critique feedback for revision, up to `max_attempts` times; after that it returns the best attempt flagged low-confidence rather than failing outright.

@@ -1,66 +1,16 @@
 import tempfile
-import time
 from pathlib import Path
 
 import streamlit as st
 
 from src.embeddings import EmbeddingModel
 from src.ingest import load_and_chunk
-from src.langgraph_agents import make_orchestrator
+from src.langgraph_agents import build_initial_state, make_orchestrator
 from src.vectorstore import FaissStore
 
 st.set_page_config(page_title="Research Assistant (demo)")
 
 st.title("Research Assistant — LangGraph demo (scaffold)")
-
-
-def call_with_retries_validate(
-    fn,
-    *args,
-    validator=None,
-    max_attempts=3,
-    initial_delay=1.0,
-    multiplier=2.0,
-    on_attempt=None,
-    **kwargs,
-):
-    """Call `fn(*args, **kwargs)` repeatedly until `validator(result)` is True or attempts exhausted.
-
-    - `validator` may be None (treated as always-true).
-    - `on_attempt` is an optional callback receiving the attempt number (1-based).
-    """
-    delay = initial_delay
-    for attempt in range(1, max_attempts + 1):
-        if on_attempt:
-            try:
-                on_attempt(attempt)
-            except Exception:
-                pass
-        try:
-            res = fn(*args, **kwargs)
-        except Exception:
-            if attempt < max_attempts:
-                time.sleep(delay)
-                delay *= multiplier
-                continue
-            raise
-
-        if validator is None:
-            return res
-
-        try:
-            ok = validator(res)
-        except Exception:
-            ok = False
-
-        if ok:
-            return res
-        if attempt < max_attempts:
-            time.sleep(delay)
-            delay *= multiplier
-            continue
-    return res
-
 
 # Mode selector: main QA or Feedback Dashboard
 mode = st.sidebar.radio("Mode", ["QA", "Feedback Dashboard"])
@@ -167,126 +117,66 @@ if mode != "Feedback Dashboard":
             store = st.session_state['store']
             embedder = st.session_state['embedder']
 
-            # Create orchestrator (retriever_fn, summarizer_fn, critic_fn)
-            retriever_fn, summarizer_fn, critic_fn = make_orchestrator(store, embedder)
+            graph = make_orchestrator(store, embedder)
+            initial_state = build_initial_state(query, max_attempts=3)
 
-            # Retrieve
-            results = retriever_fn(query, top_k=5)
+            status_placeholder = st.empty()
+            final_state = initial_state
+            for state_update in graph.stream(initial_state, stream_mode="values"):
+                final_state = state_update
+                status_placeholder.info(f"Running multi-agent pipeline... (attempt {final_state.get('attempt', 0)})")
+            status_placeholder.empty()
+
             st.header("Retrieved chunks")
-            retrieved_texts = []
-            retrieved_chunks = []
-            for score, meta in results:
-                src = meta.get('source', {})
-                st.write(f"**Score:** {score:.3f} — page: {src.get('page', 'N/A')}")
-                st.write(meta.get('text', '')[:1000])
-                retrieved_texts.append(meta.get('text', ''))
-                retrieved_chunks.append({"text": meta.get('text', ''), "source": src or {}, "id": meta.get('id')})
+            for chunk in final_state['retrieved_chunks']:
+                src = chunk.get('source', {})
+                st.write(f"page: {src.get('page', 'N/A')}")
+                st.write(chunk.get('text', '')[:1000])
 
-            # Summarize
-            with st.spinner("Summarizing with LLM..."):
-                # pass rich chunk metadata to improve citation accuracy
-                status_placeholder = st.empty()
-
-                def _show_summarizer_attempt(a):
-                    status_placeholder.info(f"Summarizer attempt {a}...")
-
-                summary_res = call_with_retries_validate(
-                    summarizer_fn,
-                    retrieved_chunks,
-                    validator=lambda r: not (isinstance(r, dict) and r.get('valid', True) is False),
-                    max_attempts=3,
-                    initial_delay=1.0,
-                    multiplier=2.0,
-                    on_attempt=_show_summarizer_attempt,
+            if final_state.get('degraded_mode'):
+                st.warning(
+                    "Running in degraded mode: no OpenAI API key/SDK detected, so summarization "
+                    "and scoring are using heuristic fallbacks instead of an LLM."
                 )
-                status_placeholder.empty()
+
+            summary_res = final_state.get('summary') or {}
+            summary_text = summary_res.get('summary', '')
             st.header("Summary")
-            # summary_res is a dict {summary, citations, valid} per new schema
-            if isinstance(summary_res, dict):
-                summary_text = summary_res.get('summary', '')
-                st.write(summary_text)
-                if not summary_res.get('valid', True):
-                    st.error("Summarizer did not return valid structured citations. Summary marked as invalid.")
-                    st.warning("You must regenerate a valid structured summary before accepting or saving feedback.")
-            else:
-                summary_text = str(summary_res)
-                st.write(summary_text)
+            st.write(summary_text)
+            if not summary_res.get('valid', True):
+                st.error("Summarizer did not return valid structured citations. Summary marked as invalid.")
 
-            # Critic
-            with st.spinner("Assessing summary..."):
-                critic_placeholder = st.empty()
-
-                def _show_critic_attempt(a):
-                    critic_placeholder.info(f"Critic attempt {a}...")
-
-                assessment = call_with_retries_validate(
-                    critic_fn,
-                    summary_text,
-                    validator=None,
-                    max_attempts=2,
-                    initial_delay=0.5,
-                    multiplier=2.0,
-                    on_attempt=_show_critic_attempt,
-                )
-                critic_placeholder.empty()
             st.header("Critic")
-            st.json(assessment)
+            st.json(final_state.get('critic_assessment') or {})
 
-            # Compute enhanced numeric confidence
-            from src.evaluator import compute_numeric_confidence
-            numeric_score = compute_numeric_confidence(
-                summary_text if not isinstance(summary_res, dict) else summary_res,
-                results,
-                store,
-                embedder,
-                critic_assessment=assessment,
-            )
-            st.metric(label="Confidence (0-100)", value=numeric_score)
+            st.header("Citation verification")
+            st.json(final_state.get('citation_verification') or {})
 
-            # Verifier agent output
-            from src.agents import VerifierAgent
-            verifier = VerifierAgent(store, embedder)
-            original_ids = [m.get('id') for _, m in results if m.get('id') is not None]
-            verifier_placeholder = st.empty()
+            reliability_score = final_state.get('reliability_score')
+            st.metric(label="Reliability (0-100)", value=reliability_score)
 
-            def _show_verifier_attempt(a):
-                verifier_placeholder.info(f"Verifier attempt {a}...")
-
-            try:
-                verify_res = call_with_retries_validate(
-                    verifier.verify,
-                    summary_text,
-                    original_ids,
-                    validator=None,
-                    max_attempts=2,
-                    initial_delay=0.5,
-                    multiplier=2.0,
-                    on_attempt=_show_verifier_attempt,
+            decision = final_state.get('reliability_decision')
+            if decision == "exhausted":
+                st.warning(
+                    f"Reliability score stayed below threshold after {final_state.get('attempt')} attempts "
+                    "— showing the best attempt. Treat this summary as low-confidence."
                 )
-            finally:
-                verifier_placeholder.empty()
-            st.write("Verifier overlap:", verify_res)
-
-            # Citation enforcement note
-            from src.evaluator import citation_present
-            has_citation = citation_present(
-                summary_res if isinstance(summary_res, dict) else summary_text,
-                [m for _, m in results],
-            )
-            if not has_citation:
-                st.warning("Summary appears to be missing citations — confidence may be downgraded.")
+            elif decision == "accept" and final_state.get('degraded_mode'):
+                st.info(
+                    f"Reliability score {reliability_score} met the threshold, but this ran in degraded "
+                    "mode (no LLM) — the score reflects text overlap only, not genuine summarization quality."
+                )
+            elif decision == "accept":
+                st.success(f"Reliability check passed after {final_state.get('attempt')} attempt(s).")
 
             # Save last result
             st.session_state['last_query'] = query
             st.session_state['last_summary'] = summary_text
-            st.session_state['last_assessment'] = assessment
-            st.session_state['last_confidence'] = numeric_score
+            st.session_state['last_assessment'] = final_state.get('critic_assessment')
+            st.session_state['last_confidence'] = reliability_score
 
             # Human-in-the-loop feedback
-            # Only allow acceptance if the summarizer returned a valid structured summary
-            allow_accept = True
-            if isinstance(summary_res, dict) and not summary_res.get('valid', False):
-                allow_accept = False
+            allow_accept = summary_res.get('valid', False) or decision == "accept"
 
             st.write("Was this answer accurate?")
             col1, col2 = st.columns(2)
@@ -295,7 +185,7 @@ if mode != "Feedback Dashboard":
                 fb = {
                     "query": query,
                     "summary": summary_text,
-                    "confidence": numeric_score,
+                    "confidence": reliability_score,
                     "label": "accurate",
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                     "paper_id": st.session_state.get('paper_id'),
@@ -313,7 +203,7 @@ if mode != "Feedback Dashboard":
                 fb = {
                     "query": query,
                     "summary": summary_text,
-                    "confidence": numeric_score,
+                    "confidence": reliability_score,
                     "label": "hallucinated",
                     "timestamp": datetime.datetime.utcnow().isoformat(),
                     "paper_id": st.session_state.get('paper_id'),
@@ -325,14 +215,7 @@ if mode != "Feedback Dashboard":
                     f.write(json.dumps(fb) + "\n")
                 st.error("Feedback saved: hallucinated")
             if not allow_accept:
-                if st.button("Regenerate structured summary"):
-                    with st.spinner("Regenerating summary..."):
-                        summary_res = summarizer_fn(retrieved_chunks)
-                        if isinstance(summary_res, dict):
-                            summary_text = summary_res.get('summary', '')
-                        else:
-                            summary_text = str(summary_res)
-                        st.experimental_rerun()
+                st.info("Summary was not structurally valid — ask the question again to retry.")
 
         # Index persistence controls
         st.sidebar.header("Index storage")
