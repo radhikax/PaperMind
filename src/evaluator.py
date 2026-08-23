@@ -37,8 +37,9 @@ class ReliabilityEvaluator:
     CRITIC_WEIGHT = 0.20
     CITATION_WEIGHT = 0.15
 
-    def __init__(self, accept_threshold: int = 70):
+    def __init__(self, accept_threshold: int = 70, calibrator=None):
         self.accept_threshold = accept_threshold
+        self.calibrator = calibrator
 
     def evaluate(
         self,
@@ -65,16 +66,26 @@ class ReliabilityEvaluator:
             + self.CRITIC_WEIGHT * critic_conf
             + self.CITATION_WEIGHT * citation_verified_ratio
         )
-        score = int(round(max(0.0, min(1.0, base)) * 100))
+        raw_score = int(round(max(0.0, min(1.0, base)) * 100))
+        score = self.calibrator.apply(raw_score) if self.calibrator else raw_score
+        calibration_active = bool(self.calibrator and self.calibrator.active)
+        calibration_samples = self.calibrator.n_samples if self.calibrator else 0
+
+        verdict = {
+            "score": score,
+            "raw_score": raw_score,
+            "calibration_active": calibration_active,
+            "calibration_samples": calibration_samples,
+        }
 
         if score >= self.accept_threshold:
-            return {"score": score, "decision": "accept", "critique_feedback": None}
+            return {**verdict, "decision": "accept", "critique_feedback": None}
 
         if attempt >= max_attempts:
-            return {"score": score, "decision": "exhausted", "critique_feedback": None}
+            return {**verdict, "decision": "exhausted", "critique_feedback": None}
 
         critique_feedback = self._build_critique(semantic, verifier, critic_assessment, citation_verified_ratio)
-        return {"score": score, "decision": "revise", "critique_feedback": critique_feedback}
+        return {**verdict, "decision": "revise", "critique_feedback": critique_feedback}
 
     def _build_critique(
         self,

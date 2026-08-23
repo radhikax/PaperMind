@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agents import (CitationVerifierAgent, CriticAgent, RetrieverAgent,
                         SummarizerAgent)
+from src.calibration import load_calibrator
 from src.evaluator import ReliabilityEvaluator
 
 
@@ -17,6 +18,9 @@ class GraphState(TypedDict):
     critic_assessment: Optional[Dict[str, Any]]
     citation_verification: Optional[Dict[str, Any]]
     reliability_score: Optional[int]
+    reliability_raw_score: Optional[int]
+    calibration_active: bool
+    calibration_samples: int
     reliability_decision: Optional[str]
     critique_feedback: Optional[str]
     attempt: int
@@ -34,6 +38,9 @@ def build_initial_state(query: str, max_attempts: int = 3) -> GraphState:
         "critic_assessment": None,
         "citation_verification": None,
         "reliability_score": None,
+        "reliability_raw_score": None,
+        "calibration_active": False,
+        "calibration_samples": 0,
         "reliability_decision": None,
         "critique_feedback": None,
         "attempt": 0,
@@ -53,17 +60,23 @@ def make_orchestrator(
     critic=None,
     citation_verifier=None,
     evaluator=None,
+    calibrator=None,
 ):
     """Build and compile the reliability-gated multi-agent graph.
 
-    `summarizer`/`critic`/`citation_verifier`/`evaluator` are optional
-    dependency-injection overrides (used by tests); omit them for real use.
+    `summarizer`/`critic`/`citation_verifier`/`evaluator`/`calibrator` are
+    optional dependency-injection overrides (used by tests); omit them for
+    real use. When `evaluator` is omitted, the default one calibrates its
+    score against `feedback.jsonl` (see `src/calibration.py`) unless
+    `calibrator` is also given explicitly.
     """
     retriever = RetrieverAgent(store, embedder)
     summarizer = summarizer or SummarizerAgent(llm_model=(llm or "gpt-4o-mini"))
     critic = critic or CriticAgent(llm_model=(llm or "gpt-4o-mini"))
     citation_verifier = citation_verifier or CitationVerifierAgent()
-    evaluator = evaluator or ReliabilityEvaluator(accept_threshold=accept_threshold)
+    if evaluator is None:
+        calibrator = calibrator if calibrator is not None else load_calibrator()
+        evaluator = ReliabilityEvaluator(accept_threshold=accept_threshold, calibrator=calibrator)
 
     def retriever_node(state: GraphState) -> dict:
         results = retriever.retrieve(state["query"], top_k=top_k)
@@ -111,6 +124,9 @@ def make_orchestrator(
         }
         return {
             "reliability_score": verdict["score"],
+            "reliability_raw_score": verdict["raw_score"],
+            "calibration_active": verdict["calibration_active"],
+            "calibration_samples": verdict["calibration_samples"],
             "reliability_decision": verdict["decision"],
             "critique_feedback": verdict["critique_feedback"],
             "history": state["history"] + [history_entry],

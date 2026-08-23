@@ -3,6 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from src.calibration import MIN_SAMPLES as MIN_CALIBRATION_SAMPLES
 from src.embeddings import EmbeddingModel
 from src.ingest import load_and_chunk
 from src.langgraph_agents import build_initial_state, make_orchestrator
@@ -21,6 +22,21 @@ if mode == "Feedback Dashboard":
     import os
 
     import pandas as pd
+
+    from src.calibration import load_calibrator
+    calibrator = load_calibrator()
+    if calibrator.active:
+        st.success(
+            f"Score calibration is active, fit on {calibrator.n_samples} labeled answers. "
+            "Reliability scores shown in QA mode are adjusted by this curve before the "
+            "accept/revise decision is made."
+        )
+    else:
+        st.info(
+            f"Score calibration is inactive — {calibrator.n_samples}/{MIN_CALIBRATION_SAMPLES} "
+            "labeled answers collected. Every click below moves it closer to kicking in."
+        )
+
     if os.path.exists("feedback.jsonl"):
         rows = []
         with open("feedback.jsonl", "r", encoding="utf-8") as f:
@@ -154,6 +170,22 @@ if mode != "Feedback Dashboard":
 
             reliability_score = final_state.get('reliability_score')
             st.metric(label="Reliability (0-100)", value=reliability_score)
+
+            calibration_samples = final_state.get('calibration_samples', 0)
+            if final_state.get('calibration_active'):
+                raw_score = final_state.get('reliability_raw_score')
+                if raw_score != reliability_score:
+                    st.caption(
+                        f"Calibrated using {calibration_samples} past labeled answers — "
+                        f"the raw formula scored this {raw_score}."
+                    )
+                else:
+                    st.caption(f"Calibrated using {calibration_samples} past labeled answers.")
+            else:
+                st.caption(
+                    f"Calibration inactive — {calibration_samples}/{MIN_CALIBRATION_SAMPLES} labeled "
+                    "answers collected. Score is the raw formula, unchecked against outcomes."
+                )
 
             decision = final_state.get('reliability_decision')
             if decision == "exhausted":

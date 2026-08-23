@@ -73,6 +73,53 @@ def test_reliability_evaluator_revises_low_score_with_retries_left():
     assert "hallucination_rate" in result["critique_feedback"]
 
 
+class FakeCalibrator:
+    def __init__(self, apply_fn, active=True, n_samples=10):
+        self._apply_fn = apply_fn
+        self.active = active
+        self.n_samples = n_samples
+
+    def apply(self, raw_score):
+        return self._apply_fn(raw_score)
+
+
+def test_reliability_evaluator_without_calibrator_returns_raw_score():
+    evaluator = ReliabilityEvaluator(accept_threshold=70)
+    result = evaluator.evaluate(
+        "a summary",
+        retrieved_chunks=[{"id": 1}],
+        store=DummyStore(score=0.95, ids=(1,)),
+        embedder=DummyEmbedder(),
+        critic_assessment={"confidence": 0.9, "hallucination_rate": 0.05},
+        citation_verified_ratio=1.0,
+        attempt=1,
+        max_attempts=3,
+    )
+    assert result["score"] == result["raw_score"]
+    assert result["calibration_active"] is False
+
+
+def test_reliability_evaluator_applies_calibrator_and_can_flip_the_decision():
+    evaluator = ReliabilityEvaluator(
+        accept_threshold=70,
+        calibrator=FakeCalibrator(lambda raw: max(0, raw - 40)),
+    )
+    result = evaluator.evaluate(
+        "a summary",
+        retrieved_chunks=[{"id": 1}],
+        store=DummyStore(score=0.95, ids=(1,)),
+        embedder=DummyEmbedder(),
+        critic_assessment={"confidence": 0.9, "hallucination_rate": 0.05},
+        citation_verified_ratio=1.0,
+        attempt=3,
+        max_attempts=3,
+    )
+    assert result["raw_score"] >= 70
+    assert result["score"] == result["raw_score"] - 40
+    assert result["decision"] == "exhausted"
+    assert result["calibration_active"] is True
+
+
 def test_reliability_evaluator_exhausted_after_max_attempts():
     evaluator = ReliabilityEvaluator(accept_threshold=70)
     result = evaluator.evaluate(
