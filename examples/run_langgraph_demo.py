@@ -9,14 +9,14 @@ LangGraph is not installed.
 import sys
 from pprint import pprint
 
-from src.ingest import load_and_chunk
 from src.embeddings import EmbeddingModel
-from src.vectorstore import FaissStore
+from src.ingest import load_and_chunk
 from src.langgraph_agents import make_orchestrator
+from src.vectorstore import FaissStore
 
 
 def main(pdf_path: str, query: str):
-    chunks = load_and_chunk(pdf_path)
+    chunks, _flagged_pages = load_and_chunk(pdf_path)
     texts = [c.get('text', '') for c in chunks]
 
     embedder = EmbeddingModel()

@@ -9,7 +9,10 @@ class DummyStore:
         self.ids = ids
 
     def search(self, q_emb, top_k=5):
-        return [(self.score, {"id": i, "source": {"page": 1}, "text": "source text"}) for i in self.ids]
+        return [
+            (self.score, {"id": i, "source": {"start_page": 1, "end_page": 1}, "text": "source text"})
+            for i in self.ids
+        ]
 
 
 class DummyEmbedder:
@@ -43,7 +46,7 @@ def test_graph_accepts_a_high_quality_first_attempt():
     store = DummyStore(score=0.95, ids=(1,))
     embedder = DummyEmbedder()
     summarizer = ScriptedSummarizer(
-        [{"summary": "Good summary.", "citations": [{"chunk_id": 1, "page": 1, "excerpt": "source text"}],
+        [{"summary": "Good summary.", "citations": [{"chunk_id": 1, "page": "1", "excerpt": "source text"}],
           "valid": True}]
     )
     critic = FixedCritic({"confidence": 0.9, "hallucination_rate": 0.05, "notes": "fine"})
@@ -59,9 +62,10 @@ def test_graph_accepts_a_high_quality_first_attempt():
 def test_graph_revises_a_low_quality_summary_then_accepts():
     store = DummyStore(score=0.5, ids=(1,))
     embedder = DummyEmbedder()
-    bad = {"summary": "Bad summary.", "citations": [{"chunk_id": 999, "page": 9, "excerpt": "nope"}],
+    bad = {"summary": "Bad summary.", "citations": [{"chunk_id": 999, "page": "9", "excerpt": "nope"}],
            "valid": True}
-    good = {"summary": "Good revised summary.", "citations": [{"chunk_id": 1, "page": 1, "excerpt": "source text"}],
+    good = {"summary": "Good revised summary.",
+            "citations": [{"chunk_id": 1, "page": "1", "excerpt": "source text"}],
             "valid": True}
     summarizer = ScriptedSummarizer([bad, good])
     critic = FixedCritic({"confidence": 0.9, "hallucination_rate": 0.05, "notes": "fine"})

@@ -8,7 +8,7 @@ class DummyStore:
         self.ids = ids
 
     def search(self, q_emb, top_k=10):
-        return [(self.score, {"id": i, "source": {"page": 1}}) for i in self.ids]
+        return [(self.score, {"id": i, "source": {"start_page": 1, "end_page": 1}}) for i in self.ids]
 
 
 class EmptyStore:
