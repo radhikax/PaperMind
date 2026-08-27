@@ -42,8 +42,44 @@ def test_load_and_chunk():
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     tmp.close()
     make_sample_pdf(tmp.name, "This is a simple PDF for testing ingestion. It has a few sentences.")
-    chunks = load_and_chunk(tmp.name, chunk_size=200, overlap=50)
+    chunks, flagged_pages = load_and_chunk(tmp.name, chunk_size=200, overlap=50)
     assert isinstance(chunks, list)
     assert len(chunks) > 0
     for c in chunks:
         assert "text" in c and "source" in c
+    assert isinstance(flagged_pages, list)
+
+
+def make_two_page_pdf(path: str, page1_text: str, page2_text: str):
+    c = canvas.Canvas(path)
+    c.drawString(72, 720, page1_text)
+    c.showPage()
+    c.drawString(72, 720, page2_text)
+    c.showPage()
+    c.save()
+
+
+def test_sentence_spanning_a_page_break_stays_in_one_chunk():
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    make_two_page_pdf(
+        tmp.name,
+        "Intro sentence here. The argument continues across the page break without",
+        "stopping until it finally ends here. A short new sentence follows.",
+    )
+    chunks, _flagged = load_and_chunk(tmp.name, chunk_size=1000, overlap=200)
+    assert len(chunks) == 1
+    assert "continues across the page break without" in chunks[0]["text"]
+    assert "until it finally ends here" in chunks[0]["text"]
+    src = chunks[0]["source"]
+    assert src["start_page"] == 1
+    assert src["end_page"] == 2
+
+
+def test_chunk_within_a_single_page_has_equal_start_and_end_page():
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp.close()
+    make_sample_pdf(tmp.name, "A short single-page document with one plain sentence in it.")
+    chunks, _flagged = load_and_chunk(tmp.name, chunk_size=1000, overlap=200)
+    assert len(chunks) == 1
+    assert chunks[0]["source"]["start_page"] == chunks[0]["source"]["end_page"] == 1

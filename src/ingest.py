@@ -1,5 +1,6 @@
+import bisect
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pdfplumber
 
@@ -51,62 +52,105 @@ def format_page_label(source: dict) -> Optional[str]:
     return str(start_page)
 
 
-def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
-    """Create overlapping chunks across pages, preserving source metadata.
+def _build_document(pages: List[Dict]) -> Tuple[str, List[Tuple[int, int]]]:
+    """Concatenate page texts into one document string, plus an offset->page lookup.
 
-    Each chunk is a dict: {"text": str, "source": {"page": int, "start_char": int, "end_char": int}}
+    Returns (document_text, page_offsets), where page_offsets is a list of
+    (start_offset, page_num) pairs -- one per non-empty page, sorted by offset.
     """
-    chunks: List[Dict] = []
+    parts = []
+    offsets: List[Tuple[int, int]] = []
+    cursor = 0
     for page in pages:
-        page_num = page.get("page")
         text = page.get("text", "")
         if not text:
             continue
-        sentences = split_sentences(text)
-        cur = ""
-        for sent in sentences:
-            if cur:
-                next_text = cur + " " + sent
-            else:
-                next_text = sent
+        offsets.append((cursor, page.get("page")))
+        parts.append(text)
+        cursor += len(text) + 1  # +1 for the "\n" join separator
+    return "\n".join(parts), offsets
 
-            if len(next_text) >= chunk_size:
-                # finalize current chunk
-                start_idx = text.find(cur) if cur else text.find(sent)
-                end_idx = start_idx + len(cur)
-                chunks.append(
-                    {
-                        "text": cur.strip(),
-                        "source": {
-                            "page": page_num,
-                            "start_char": start_idx,
-                            "end_char": end_idx,
-                        },
-                    }
-                )
-                # prepare next chunk with overlap
-                overlap_text = next_text[-overlap:]
-                cur = overlap_text
-            else:
-                cur = next_text
 
+def _page_at(offset: int, page_offsets: List[Tuple[int, int]]) -> int:
+    """Binary-search the page owning a character offset in the concatenated document."""
+    starts = [o for o, _ in page_offsets]
+    idx = max(bisect.bisect_right(starts, offset) - 1, 0)
+    return page_offsets[idx][1]
+
+
+def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+    """Create overlapping chunks across the whole document, preserving page attribution.
+
+    Chunks are cut on chunk_size/overlap alone -- page boundaries no longer force a
+    cut, so a sentence that spans two pages stays in one chunk. Each chunk is a dict:
+    {"text": str, "source": {"start_page": int, "end_page": int, "start_char": int, "end_char": int}}.
+    start_char/end_char index into the concatenated document, not a single page's text.
+    """
+    document, page_offsets = _build_document(pages)
+    if not document:
+        return []
+
+    sentences = split_sentences(document)
+    chunks: List[Dict] = []
+    cur = ""
+    cur_start = 0
+    pos = 0
+
+    for sent in sentences:
+        sent_start = pos if not cur else pos + 1
         if cur:
-            start_idx = text.find(cur)
+            next_text = cur + " " + sent
+        else:
+            next_text = sent
+            cur_start = sent_start
+
+        if len(next_text) >= chunk_size:
+            start_idx = cur_start
             end_idx = start_idx + len(cur)
             chunks.append(
                 {
                     "text": cur.strip(),
                     "source": {
-                        "page": page_num,
+                        "start_page": _page_at(start_idx, page_offsets),
+                        "end_page": _page_at(max(end_idx - 1, start_idx), page_offsets),
                         "start_char": start_idx,
                         "end_char": end_idx,
                     },
                 }
             )
+            # prepare next chunk with overlap
+            overlap_text = next_text[-overlap:]
+            cur = overlap_text
+            sent_end = sent_start + len(sent)
+            cur_start = sent_end - len(overlap_text)
+            pos = sent_end
+        else:
+            cur = next_text
+            pos = sent_start + len(sent)
+
+    if cur:
+        end_idx = cur_start + len(cur)
+        chunks.append(
+            {
+                "text": cur.strip(),
+                "source": {
+                    "start_page": _page_at(cur_start, page_offsets),
+                    "end_page": _page_at(max(end_idx - 1, cur_start), page_offsets),
+                    "start_char": cur_start,
+                    "end_char": end_idx,
+                },
+            }
+        )
 
     return chunks
 
 
-def load_and_chunk(path: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+def load_and_chunk(path: str, chunk_size: int = 1000, overlap: int = 200) -> Tuple[List[Dict], List[int]]:
+    """Load a PDF, chunk it, and report which pages produced little or no text.
+
+    Returns (chunks, flagged_pages) -- flagged_pages are page numbers likely to be
+    scanned images or layouts pdfplumber couldn't parse (see flagged_low_text_pages).
+    """
     pages = load_pdf_pages(path)
-    return chunk_pages_to_chunks(pages, chunk_size=chunk_size, overlap=overlap)
+    chunks = chunk_pages_to_chunks(pages, chunk_size=chunk_size, overlap=overlap)
+    return chunks, flagged_low_text_pages(pages)
