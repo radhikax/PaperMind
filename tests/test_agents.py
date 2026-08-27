@@ -38,7 +38,7 @@ class RaisingClient:
 
 def test_summarizer_without_client_falls_back_to_heuristic():
     agent = SummarizerAgent(client=None)
-    chunks = [{"text": "This is a test passage.", "source": {"page": 3}, "id": 7}]
+    chunks = [{"text": "This is a test passage.", "source": {"start_page": 3, "end_page": 3}, "id": 7}]
     res = agent.summarize(chunks)
     assert res["valid"] is False
     assert "[chunk_id:7" in res["summary"]
@@ -47,10 +47,10 @@ def test_summarizer_without_client_falls_back_to_heuristic():
 def test_summarizer_uses_structured_output_when_client_available():
     parsed = SummaryResponse(
         summary="Short summary.",
-        citations=[Citation(page=3, chunk_id=7, excerpt="test passage")],
+        citations=[Citation(page="3", chunk_id=7, excerpt="test passage")],
     )
     agent = SummarizerAgent(client=FakeClient(FakeMessage(parsed=parsed)))
-    chunks = [{"text": "This is a test passage.", "source": {"page": 3}, "id": 7}]
+    chunks = [{"text": "This is a test passage.", "source": {"start_page": 3, "end_page": 3}, "id": 7}]
     res = agent.summarize(chunks)
     assert res["valid"] is True
     assert "Short summary." in res["summary"]
@@ -67,7 +67,7 @@ def test_summarizer_includes_critique_feedback_in_revision_prompt():
 
     client = type("C", (), {"chat": type("Chat", (), {"completions": CapturingCompletions()})()})()
     agent = SummarizerAgent(client=client)
-    chunks = [{"text": "Passage.", "source": {"page": 1}, "id": 1}]
+    chunks = [{"text": "Passage.", "source": {"start_page": 1, "end_page": 1}, "id": 1}]
     agent.summarize(chunks, critique_feedback="citation missing", previous_summary="Old summary")
     user_msg = captured["messages"][1]["content"]
     assert "citation missing" in user_msg
@@ -76,7 +76,7 @@ def test_summarizer_includes_critique_feedback_in_revision_prompt():
 
 def test_summarizer_falls_back_when_client_raises():
     agent = SummarizerAgent(client=RaisingClient(), max_attempts=1)
-    chunks = [{"text": "Passage text.", "source": {"page": 1}, "id": 1}]
+    chunks = [{"text": "Passage text.", "source": {"start_page": 1, "end_page": 1}, "id": 1}]
     res = agent.summarize(chunks)
     assert res["valid"] is False
 
@@ -84,6 +84,13 @@ def test_summarizer_falls_back_when_client_raises():
 def test_summarizer_max_attempts_attr():
     a = SummarizerAgent(max_attempts=5, client=None)
     assert a.max_attempts == 5
+
+
+def test_summarizer_header_shows_a_page_range_for_a_spanning_chunk():
+    agent = SummarizerAgent(client=None)
+    chunks = [{"text": "Spans two pages.", "source": {"start_page": 3, "end_page": 4}, "id": 2}]
+    res = agent.summarize(chunks)
+    assert "[chunk_id:2 page:3-4]" in res["summary"]
 
 
 def test_critic_without_client_falls_back_to_heuristic():
@@ -108,8 +115,8 @@ def test_critic_falls_back_when_client_raises():
 
 def test_citation_verifier_flags_missing_chunk():
     result = CitationVerifierAgent().verify(
-        [{"chunk_id": 99, "page": 1, "excerpt": "nope"}],
-        [{"id": 1, "text": "Some real text.", "source": {"page": 1}}],
+        [{"chunk_id": 99, "page": "1", "excerpt": "nope"}],
+        [{"id": 1, "text": "Some real text.", "source": {"start_page": 1, "end_page": 1}}],
     )
     assert result["verified_ratio"] == 0.0
     assert result["checks"][0]["found_in_chunks"] is False
@@ -117,8 +124,8 @@ def test_citation_verifier_flags_missing_chunk():
 
 def test_citation_verifier_matches_excerpt_in_source_text():
     result = CitationVerifierAgent().verify(
-        [{"chunk_id": 1, "page": 1, "excerpt": "real text"}],
-        [{"id": 1, "text": "Some real text right here.", "source": {"page": 1}}],
+        [{"chunk_id": 1, "page": "1", "excerpt": "real text"}],
+        [{"id": 1, "text": "Some real text right here.", "source": {"start_page": 1, "end_page": 1}}],
     )
     assert result["verified_ratio"] == 1.0
     assert result["checks"][0]["text_match"] is True

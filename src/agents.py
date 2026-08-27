@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 
+from src.ingest import format_page_label
 from src.llm_client import get_openai_client
 from src.retry import call_with_retries_validate
 from src.schemas import CriticAssessment, SummaryResponse
@@ -24,9 +25,12 @@ def _format_passages(chunks: List[dict]) -> str:
         if isinstance(c, dict):
             text = c.get('text', '')
             src = c.get('source', {}) or {}
-            page = src.get('page') or c.get('page')
+            page_label = format_page_label(src)
             chunk_id = c.get('id') if c.get('id') is not None else i
-            header = f"[chunk_id:{chunk_id} page:{page}]" if page is not None else f"[chunk_id:{chunk_id}]"
+            if page_label is not None:
+                header = f"[chunk_id:{chunk_id} page:{page_label}]"
+            else:
+                header = f"[chunk_id:{chunk_id}]"
             passages.append(f"{header}\n{text}")
         else:
             passages.append(str(c))
@@ -59,7 +63,8 @@ class SummarizerAgent:
 
         system = (
             "You are a helpful assistant that summarizes scientific paper snippets. "
-            "Each passage is prefixed with metadata like [chunk_id:X page:Y]. "
+            "Each passage is prefixed with metadata like [chunk_id:X page:Y], where Y may be a "
+            "single page number or a range like 3-4 when a passage spans two pages. "
             "Every citation you return must reference a chunk_id that actually appears "
             "in the passages, and its excerpt must be copied verbatim from that chunk's text."
         )
