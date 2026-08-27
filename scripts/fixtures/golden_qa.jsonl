@@ -1,0 +1,12 @@
+{"question": "What accuracy does WidgetNet achieve on the WidgetBench test set?", "expected_pages": [1, 4], "adversarial": false}
+{"question": "How many labeled widget images are in the WidgetBench dataset?", "expected_pages": [2], "adversarial": false}
+{"question": "How many manufacturing plants contributed to the WidgetBench dataset?", "expected_pages": [2], "adversarial": false}
+{"question": "What are the seven widget categories used in this study?", "expected_pages": [2], "adversarial": false}
+{"question": "How many training, validation, and test images are in the dataset split?", "expected_pages": [2], "adversarial": false}
+{"question": "What optimizer and learning rate were used to train WidgetNet?", "expected_pages": [3], "adversarial": false}
+{"question": "How many epochs was WidgetNet trained for?", "expected_pages": [3], "adversarial": false}
+{"question": "How long did training take?", "expected_pages": [3], "adversarial": false}
+{"question": "What accuracy did the ResNet-34 baseline achieve?", "expected_pages": [4], "adversarial": false}
+{"question": "What is WidgetNet's most common error, and what fraction of misclassifications does it account for?", "expected_pages": [4], "adversarial": false}
+{"question": "Under what lighting conditions was WidgetNet evaluated, and what future work is planned?", "expected_pages": [5], "adversarial": false}
+{"question": "What programming language and deep learning framework was WidgetNet implemented in?", "expected_pages": [], "adversarial": true}
