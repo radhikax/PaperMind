@@ -19,6 +19,7 @@ import os
 from typing import Dict, List
 
 GOLDEN_QA_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "golden_qa.jsonl")
+MIN_VERIFIED_RATIO = 0.5  # mirrors the literal in ReliabilityEvaluator._build_critique (src/evaluator.py)
 
 
 def load_golden_qa(path: str) -> List[Dict]:
@@ -30,3 +31,16 @@ def load_golden_qa(path: str) -> List[Dict]:
             if line:
                 questions.append(json.loads(line))
     return questions
+
+
+def chunk_covers_expected_page(source: dict, expected_pages: List[int]) -> bool:
+    """True if a chunk's [start_page, end_page] range includes at least one expected page."""
+    start_page = source.get("start_page")
+    end_page = source.get("end_page")
+    if start_page is None or end_page is None:
+        return False
+    return any(start_page <= page <= end_page for page in expected_pages)
+
+
+def passes_verification_floor(verified_ratio: float) -> bool:
+    return verified_ratio >= MIN_VERIFIED_RATIO
