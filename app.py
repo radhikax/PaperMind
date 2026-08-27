@@ -5,7 +5,7 @@ import streamlit as st
 
 from src.calibration import MIN_SAMPLES as MIN_CALIBRATION_SAMPLES
 from src.embeddings import EmbeddingModel
-from src.ingest import load_and_chunk
+from src.ingest import format_page_label, load_and_chunk
 from src.langgraph_agents import build_initial_state, make_orchestrator
 from src.paper_registry import (index_path_for, list_registered_papers,
                                 register_paper)
@@ -99,8 +99,15 @@ if mode != "Feedback Dashboard":
         paper_id = f"paper:{paper_name}"
         st.session_state['paper_id'] = paper_id
         st.info("Loading PDF and chunking...")
-        chunks = load_and_chunk(path)
+        chunks, flagged_pages = load_and_chunk(path)
         st.success(f"Loaded {len(chunks)} chunks")
+        if flagged_pages:
+            page_list = ", ".join(str(p) for p in flagged_pages)
+            st.warning(
+                f"Pages {page_list} produced little or no extractable text — they may be scanned "
+                "images or a layout pdfplumber can't parse. Content from these pages may be missing "
+                "from answers."
+            )
 
         if st.button("Build embeddings & index"):
             with st.spinner("Computing embeddings..."):
@@ -150,7 +157,8 @@ if mode != "Feedback Dashboard":
             st.header("Retrieved chunks")
             for chunk in final_state['retrieved_chunks']:
                 src = chunk.get('source', {})
-                st.write(f"page: {src.get('page', 'N/A')}")
+                page_label = format_page_label(src)
+                st.write(f"page: {page_label if page_label is not None else 'N/A'}")
                 st.write(chunk.get('text', '')[:1000])
 
             if final_state.get('degraded_mode'):
