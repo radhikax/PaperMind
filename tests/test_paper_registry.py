@@ -1,6 +1,7 @@
 import os
 
-from src.paper_registry import index_path_for, slugify_paper_id
+from src.paper_registry import (index_path_for, list_registered_papers,
+                                register_paper, slugify_paper_id)
 
 
 def test_slugify_is_stable_for_the_same_paper_id():
@@ -29,3 +30,25 @@ def test_index_path_for_is_stable_across_calls(tmp_path):
     first = index_path_for("paper:foo.pdf", base_dir=base_dir)
     second = index_path_for("paper:foo.pdf", base_dir=base_dir)
     assert first == second
+
+
+def test_register_and_list_round_trip(tmp_path):
+    base_dir = str(tmp_path / "indexes")
+    register_paper("paper:foo.pdf", "foo.pdf", base_dir=base_dir)
+    papers = list_registered_papers(base_dir=base_dir)
+    assert len(papers) == 1
+    assert papers[0]["paper_id"] == "paper:foo.pdf"
+    assert papers[0]["display_name"] == "foo.pdf"
+
+
+def test_register_paper_is_idempotent_per_paper_id(tmp_path):
+    base_dir = str(tmp_path / "indexes")
+    register_paper("paper:foo.pdf", "foo.pdf", base_dir=base_dir)
+    register_paper("paper:foo.pdf", "foo (renamed).pdf", base_dir=base_dir)
+    papers = list_registered_papers(base_dir=base_dir)
+    assert len(papers) == 1
+    assert papers[0]["display_name"] == "foo (renamed).pdf"
+
+
+def test_list_registered_papers_empty_when_nothing_registered(tmp_path):
+    assert list_registered_papers(base_dir=str(tmp_path / "indexes")) == []
