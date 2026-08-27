@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 
 class Citation(BaseModel):
-    page: Optional[int]
+    page: Optional[str]
     chunk_id: Optional[int]
     excerpt: Optional[str]
 
@@ -22,7 +22,7 @@ class CriticAssessment(BaseModel):
 
 class CitationCheck(BaseModel):
     chunk_id: Optional[int]
-    page: Optional[int]
+    page: Optional[str]
     found_in_chunks: bool
     text_match: bool
 
