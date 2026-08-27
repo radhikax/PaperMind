@@ -68,3 +68,22 @@ No new failure modes are introduced. `_page_at` always has at least one table en
 - Any change to `CitationVerifierAgent`'s matching logic (confirmed unnecessary — see Investigation findings).
 - Fixing the pre-existing fragility of `text.find(cur)`-style offset computation beyond what's needed to make it correct at document scale (the rewrite already requires replacing this with running-position tracking, so it's fixed as a byproduct, not a separate goal).
 - Any change to how retrieval ranks or selects chunks — this phase only changes chunk boundaries and their page attribution.
+
+## Addendum: extraction-gap detection
+
+**Origin:** raised alongside the cross-page chunking question — while cross-page chunking fixes information lost at a chunk *boundary*, it does nothing for information lost because a page's text was never extracted in the first place. This addendum is a bounded design (per `superpowers:brainstorming`'s bounded path — a small, contained addition, not requiring its own spec document), folded into this same implementation pass because it touches the same ingestion entry point.
+
+**Problem:** `load_pdf_pages()` (`src/ingest.py:7-17`) does `page.extract_text() or ""`. When `pdfplumber` can't extract text from a page — a scanned/image-only page, a page that's mostly a table or figure — that page silently contributes an empty string. `chunk_pages_to_chunks` skips pages with empty text (`if not text: continue`) with no warning anywhere in the pipeline. A page with a little text (e.g. a stray caption on an otherwise-scanned page) isn't empty, so today it passes through unflagged even though the real content is lost.
+
+**Design:**
+- `src/ingest.py`: add `MIN_PAGE_TEXT_CHARS = 20` and `flagged_low_text_pages(pages: List[Dict], min_chars: int = MIN_PAGE_TEXT_CHARS) -> List[int]`, returning the page numbers whose extracted text is empty or under `min_chars`. `load_and_chunk()` calls this once against the pages it already loads and returns `(chunks, flagged_pages)` instead of just `chunks`.
+- `app.py`: unpack the new tuple; when `flagged_pages` is non-empty, show `st.warning(...)` naming the affected page numbers and explaining they may be scanned images or a layout `pdfplumber` can't parse, so content from them may be missing from answers.
+- `examples/run_langgraph_demo.py` and `tests/test_ingest.py`: both call `load_and_chunk()` and need updating to unpack the new two-value return — mechanical, no behavior change for them beyond the unpacking.
+
+**Detection threshold:** empty-or-under-20-characters, not strict-empty-only. Catches near-empty pages (e.g. a scanned page with just a stray caption) at the cost of occasionally flagging a genuinely short real page (e.g. a title page) — accepted tradeoff, chosen over strict-empty-only which would miss the near-empty case entirely.
+
+**Out of scope:** detecting scrambled reading order on multi-column layouts (text present but interleaved out of order). `pdfplumber` gives no reliable per-page confidence signal for this short of comparing against word-level bounding boxes, which is a materially harder problem than "did this page produce text at all" — not attempted here.
+
+**Testing:** a new `tests/test_ingest.py` case with one normal-text page and one blank page, asserting the blank page's number comes back in `flagged_pages`; the existing `test_load_and_chunk` updated to unpack the tuple.
+
+**Independence from the main design:** this only inspects `pages` before chunking starts, so it doesn't interact with the whole-document-concatenation rewrite above — both land in the same implementation pass without conflicting.
