@@ -7,6 +7,8 @@ from src.calibration import MIN_SAMPLES as MIN_CALIBRATION_SAMPLES
 from src.embeddings import EmbeddingModel
 from src.ingest import load_and_chunk
 from src.langgraph_agents import build_initial_state, make_orchestrator
+from src.paper_registry import (index_path_for, list_registered_papers,
+                                register_paper)
 from src.vectorstore import FaissStore
 
 st.set_page_config(page_title="Research Assistant (demo)")
@@ -120,10 +122,12 @@ if mode != "Feedback Dashboard":
             st.session_state['embedder'] = embedder
             st.session_state['paper_id'] = paper_id
             st.success("Index ready")
-            # Save index automatically to disk
+            # Save index automatically to disk, keyed to this paper
             try:
-                store.save("paper_index")
-                st.info("Index saved to 'paper_index.index' and 'paper_index.pkl'")
+                index_path = index_path_for(paper_id)
+                store.save(index_path)
+                register_paper(paper_id, paper_name)
+                st.info(f"Index saved for '{paper_name}'")
             except Exception:
                 st.warning("Unable to auto-save index to disk")
 
@@ -250,18 +254,18 @@ if mode != "Feedback Dashboard":
                 st.info("Summary was not structurally valid — ask the question again to retry.")
 
         # Index persistence controls
-        st.sidebar.header("Index storage")
-        if st.sidebar.button("Load saved index"):
-            try:
-                store = FaissStore.load("paper_index")
-                st.session_state['store'] = store
-                st.success("Loaded index from 'paper_index'")
-            except Exception as e:
-                st.error(f"Failed to load index: {e}")
-
-        if st.sidebar.button("Save current index"):
-            try:
-                st.session_state['store'].save("paper_index")
-                st.success("Saved index to 'paper_index'")
-            except Exception as e:
-                st.error(f"Failed to save index: {e}")
+        st.sidebar.header("Previously indexed papers")
+        known_papers = list_registered_papers()
+        if known_papers:
+            options = {p["display_name"]: p["paper_id"] for p in known_papers}
+            choice = st.sidebar.selectbox("Load a paper", list(options.keys()))
+            if st.sidebar.button("Load"):
+                try:
+                    store = FaissStore.load(index_path_for(options[choice]))
+                    st.session_state['store'] = store
+                    st.session_state['paper_id'] = options[choice]
+                    st.sidebar.success(f"Loaded '{choice}'")
+                except Exception as e:
+                    st.sidebar.error(f"Failed to load index: {e}")
+        else:
+            st.sidebar.caption("No papers indexed yet — upload one above.")
