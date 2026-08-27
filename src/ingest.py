@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pdfplumber
 
@@ -17,6 +17,17 @@ def load_pdf_pages(path: str) -> List[Dict]:
     return pages
 
 
+MIN_PAGE_TEXT_CHARS = 20
+
+
+def flagged_low_text_pages(pages: List[Dict], min_chars: int = MIN_PAGE_TEXT_CHARS) -> List[int]:
+    """Page numbers whose extracted text is empty or suspiciously short.
+
+    Likely scanned/image-only pages, or a layout pdfplumber couldn't parse.
+    """
+    return [p["page"] for p in pages if len(p.get("text", "").strip()) < min_chars]
+
+
 _SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
 
 
@@ -27,6 +38,17 @@ def split_sentences(text: str) -> List[str]:
     sentences = _SENTENCE_SPLIT.split(text)
     # strip and filter
     return [s.strip() for s in sentences if s.strip()]
+
+
+def format_page_label(source: dict) -> Optional[str]:
+    """Render a chunk's page(s) as a display label: "3", or "3-4" when it spans pages."""
+    start_page = source.get('start_page')
+    if start_page is None:
+        return None
+    end_page = source.get('end_page')
+    if end_page is not None and end_page != start_page:
+        return f"{start_page}-{end_page}"
+    return str(start_page)
 
 
 def chunk_pages_to_chunks(pages: List[Dict], chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
