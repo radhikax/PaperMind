@@ -84,7 +84,7 @@ def make_orchestrator(
             {"text": meta.get("text", ""), "source": meta.get("source", {}) or {}, "id": meta.get("id")}
             for _, meta in results
         ]
-        return {"retrieved_chunks": retrieved, "degraded_mode": not summarizer.llm_available}
+        return {"retrieved_chunks": retrieved}
 
     def summarizer_node(state: GraphState) -> dict:
         previous = state.get("summary")
@@ -94,7 +94,11 @@ def make_orchestrator(
             critique_feedback=state.get("critique_feedback"),
             previous_summary=previous_summary,
         )
-        return {"summary": result, "attempt": state["attempt"] + 1}
+        return {
+            "summary": result,
+            "attempt": state["attempt"] + 1,
+            "degraded_mode": not result.get("valid", False),
+        }
 
     def critic_node(state: GraphState) -> dict:
         summary_text = (state.get("summary") or {}).get("summary", "")

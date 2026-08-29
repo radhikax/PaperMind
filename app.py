@@ -163,8 +163,9 @@ if mode != "Feedback Dashboard":
 
             if final_state.get('degraded_mode'):
                 st.warning(
-                    "Running in degraded mode: no OpenAI API key/SDK detected, so summarization "
-                    "and scoring are using heuristic fallbacks instead of an LLM."
+                    "Running in degraded mode: summarization is using a heuristic fallback instead "
+                    "of an LLM response, either because no OpenAI API key/SDK is available or because "
+                    "the API call itself failed (e.g. rate limits, quota, or a network error)."
                 )
 
             summary_res = final_state.get('summary') or {}

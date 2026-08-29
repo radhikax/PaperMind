@@ -79,6 +79,23 @@ def test_graph_revises_a_low_quality_summary_then_accepts():
     assert "citation" in summarizer.calls[1]["critique_feedback"]
 
 
+def test_degraded_mode_reflects_actual_call_success_not_just_client_presence():
+    """A summarizer can have llm_available=True (a client exists) but still fall back to
+    its heuristic path if the actual API call fails -- degraded_mode should catch that,
+    not just whether a client was constructed."""
+    store = DummyStore(score=0.95, ids=(1,))
+    embedder = DummyEmbedder()
+    summarizer = ScriptedSummarizer(
+        [{"summary": "Heuristic fallback text.", "citations": [], "valid": False}]
+    )
+    critic = FixedCritic({"confidence": 0.9, "hallucination_rate": 0.05, "notes": "fine"})
+
+    graph = make_orchestrator(store, embedder, summarizer=summarizer, critic=critic)
+    final_state = graph.invoke(build_initial_state("what is this paper about?", max_attempts=1))
+
+    assert final_state["degraded_mode"] is True
+
+
 def test_graph_returns_best_effort_with_low_confidence_after_exhausting_retries():
     store = DummyStore(score=0.0, ids=(1,))
     embedder = DummyEmbedder()
